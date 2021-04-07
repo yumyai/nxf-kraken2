@@ -4,8 +4,10 @@ channels:
   - bioconda
 dependencies:
   - fastp
-  - kraken2
+  - kraken2=2.1.1
+  - multiqc=1.10
   - bracken=2.6.0
+  - kaiju=1.7.4
   - krona
   - pandoc
   - r-base

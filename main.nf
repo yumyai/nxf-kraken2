@@ -15,6 +15,10 @@ ANSI_GREEN = "\033[1;32m"
 ANSI_RED = "\033[1;31m"
 ANSI_RESET = "\033[0m"
 
+def defval(param, defaultval){
+  param ? param : defaultval
+}
+
 /* 
  * pipeline input parameters 
  */
@@ -32,7 +36,21 @@ params.weakmem = false
 params.taxlevel = "S" //level to estimate abundance at [options: D,P,C,O,F,G,S] (default: S)
 params.skip_krona = false
 params.help = ""
+// Haven't put it in the argument yet.
+params.adapter1 = params.adapter1 ? params.adapter1 : ""
+params.adapter2 = params.adapter2 ? params.adapter2 : ""
+// in fastp
+// --adapter_sequence = 
+// --adapter_sequence_r2
 
+
+/* Instead of manually write this everytime, let's do it here
+log.info "Test"
+def allParams = params.keySet();
+log.info "$allParams"
+log.info "end Test"
+exit(1)
+*/
 
 /* 
  * handling of parameters 
@@ -40,7 +58,6 @@ params.help = ""
 
 //just in case trailing slash in readsdir not provided...
 readsdir_repaired = "${params.readsdir}".replaceFirst(/$/, "/") 
-//println(readsdir_repaired)
 
 // build search pattern for fastq files in input dir
 reads = readsdir_repaired + params.fqpattern
@@ -69,6 +86,8 @@ log.info """
          --weakmem          : ${params.weakmem}
          --taxlevel         : ${params.taxlevel}
          --skip_krona       : ${params.skip_krona}
+         --adapter1         : ${params.adapter1}
+         --adapter2         : ${params.adapter2}
 
          Runtime data:
         -------------------------------------------
@@ -109,6 +128,7 @@ log.info """
 
 }
 
+
 // because all is from conda, get versions from there. Note double escape for OR
 process SoftwareVersions {
     publishDir "${params.outdir}/software_versions", mode: 'copy'
@@ -138,6 +158,24 @@ Channel
     .fromFilePairs( reads, checkIfExists: true, size: -1 ) // default is 2, so set to -1 to allow any number of files
     .ifEmpty { error "Can not find any reads matching ${reads}" }
     .set{ read_ch }
+
+if(params.kraken_db){
+    kraken_db_ch = Channel.value(params.kraken_db)
+} else {
+    kraken_db_ch = Channel.empty()
+}
+
+
+// kaiju, in case params.kaiju_db is selected
+// Conditionally create the input channel with data or as empty channel,
+// the process consuming the input channels will only execute if the channel is populated
+if(params.kaiju_db){
+    Channel
+        .of( "${params.kaiju_db}" )
+        .set { kaiju_db }
+} else {
+        kaiju_db = Channel.empty()
+}
 
 
 /* 
@@ -185,22 +223,18 @@ fastp_ch
  */
 //fastp1.println()
 
-if(params.kraken_db){
-    Channel
-        .of("${params.kraken_db}")
-        .set { kraken_db_ch }
-} else {
-        kraken_db_ch = Channel.empty()
-}
-
 process Kraken2 {
     tag "kraken2 on $sample_id"
-    //echo true
+
+    cpus "32"
+    memory "80 GB"
+    time "24:00:00"
+
     publishDir "${params.outdir}/samples", mode: 'copy', pattern: '*.{report,tsv}'
     
     input:
         //path db from kraken2_db_ch.flatten().last() 
-        path db from kraken_db_ch.first() //trick to make it a value channel
+        path db from kraken_db_ch
         tuple sample_id, file(x) from fastp1
     
     output:
@@ -219,6 +253,7 @@ process Kraken2 {
         kraken2 \
             -db $db \
             $memory \
+	    --threads ${task.cpus} \
             --report ${sample_id}_kraken2.report \
             $kraken_input \
             > kraken2.output
@@ -234,18 +269,12 @@ process Kraken2 {
 
 }
 
-// kaiju, in case params.kaiju_db is selected
-// Conditionally create the input channel with data or as empty channel,
-// the process consuming the input channels will only execute if the channel is populated
-if(params.kaiju_db){
-    Channel
-        .of( "${params.kaiju_db}" )
-        .set { kaiju_db }
-} else {
-        kaiju_db = Channel.empty()
-}
 
 process  KaijuDBPrep {
+  cpus "4"
+  memory "16 GB"
+  time "24:00:00"
+
   input:
     val(x) from kaiju_db
   
@@ -316,6 +345,11 @@ process KaijuSummary {
 // process krona
     
 process KronaDB {
+
+    cpus "5"
+    memory "32 GB"
+    time "12:00:00"
+
     output:
         file("krona_db/taxonomy.tab") optional true into krona_db_ch // is this a value ch?
 
@@ -450,3 +484,5 @@ workflow.onComplete {
             .stripIndent()
     }
 }
+
+// vi: ft=groovy
