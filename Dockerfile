@@ -19,6 +19,6 @@ RUN git clone https://github.com/bioinformatics-centre/kaiju.git && \
 ENV PATH /kaiju/bin:/Bracken:$PATH
 
 # final stage, install dev version of multiqc 
-COPY environment.yml .
+COPY dockerenv.yml .
 RUN conda env update -n root -f environment.yml && \
     conda clean -afy && pip install git+https://github.com/ewels/MultiQC.git
