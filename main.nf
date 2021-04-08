@@ -37,11 +37,13 @@ params.taxlevel = "S" //level to estimate abundance at [options: D,P,C,O,F,G,S] 
 params.skip_krona = false
 params.help = ""
 // Haven't put it in the argument yet.
-params.adapter1 = params.adapter1 ? params.adapter1 : ""
-params.adapter2 = params.adapter2 ? params.adapter2 : ""
-// in fastp
-// --adapter_sequence = 
-// --adapter_sequence_r2
+params.adapter1 = ""
+params.adapter2 = ""
+// Right now make it work for pair-end
+if (params.adapter1 && params.adapter2) {
+  fastp_adapter = "--adapter_sequence ${params.adapter1} --adapter_sequence_r2 ${params.adapter2}"
+} else
+{ fastp_adapter = ""}
 
 
 /* Instead of manually write this everytime, let's do it here
@@ -184,6 +186,11 @@ if(params.kaiju_db){
 process Fastp {
 
     tag "fastp on $sample_id"
+
+    cpus "2"
+    memory "4 GB"
+    time "1:00:00"
+
     //echo true
     publishDir "${params.outdir}/trimmed_fastq", mode: 'copy', pattern: 'trim_*' // publish only trimmed fastq files
 
@@ -207,6 +214,7 @@ process Fastp {
     -q $qscore_cutoff \
     $fastp_input \
     $fastp_output \
+    $fastp_adapter \
     -j ${sample_id}_fastp.json
     """
 }
@@ -368,6 +376,8 @@ process KronaDB {
 // run krona on the kraken2 and kaiju results
 // SPLIT THIS PROCESS FOR KRAKEN AND KAIJU
 process KronaFromKraken {
+
+    memory "16GB"
     publishDir params.outdir, mode: 'copy'
 
     input:
