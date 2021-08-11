@@ -31,7 +31,6 @@ params.kraken_db = false
 //params.kraken_db = "https://genome-idx.s3.amazonaws.com/kraken/k2_standard_8gb_20200919.tar.gz"
 //params.kraken_store = "$HOME/db/kraken" // here kraken db will be collected
 // todo: stage dynamically, using the file name --> under $Home/db/kraken/filename
-params.kaiju_db = false
 params.weakmem = false
 params.taxlevel = "S" //level to estimate abundance at [options: D,P,C,O,F,G,S] (default: S)
 params.skip_krona = false
@@ -84,7 +83,6 @@ log.info """
          --readlen          : ${params.readlen}
          --outdir           : ${params.outdir}
          --kraken_db        : ${params.kraken_db}
-         --kaiju_db         : ${params.kaiju_db}
          --weakmem          : ${params.weakmem}
          --taxlevel         : ${params.taxlevel}
          --skip_krona       : ${params.skip_krona}
@@ -120,7 +118,6 @@ log.info """
          --readlen      : read length used for bracken, default is 150 (250 if ontreads is true). A kmer distribution file for this length has to be present in your database, see bracken help.
          --outdir       : where results will be saved, default is "results-kraken2"
          --kraken_db    : either 'false' (default, do not execute kraken2), or a path to a kraken2 database folder. See https://benlangmead.github.io/aws-indexes/k2 for available ready to use indexes
-         --kaiju_db     : either 'false' (default, do not execute kaiju), or one of 'refseq', 'progenomes', 'viruses', 'nr' ...
          --weakmem      : logical, set to true to avoid loading the kraken2 database in RAM (on weak machines)
          --taxlevel     : taxonomical level to estimate bracken abundance at [options: D,P,C,O,F,G,S] (default: S)
          --skip_krona   : skip making krona plots
@@ -146,7 +143,6 @@ process SoftwareVersions {
     grep 'fastp\\|kraken2\\|bracken\\|krona\\|r-data.table\\|r-dplyr\\|r-tidyr\\|r-dt\\|r-d3heatmap\\|r-base' \
     >> tempfile
 
-    echo "kaiju \$(cd /kaiju && git tag | tail -n 1)" >> tempfile
     echo 'nextflow\t${nextflow.version}\t${nextflow.build}' >> tempfile
     multiqc --version | sed 's/, version//' >> tempfile
 
@@ -165,18 +161,6 @@ if(params.kraken_db){
     kraken_db_ch = Channel.value(params.kraken_db)
 } else {
     kraken_db_ch = Channel.empty()
-}
-
-
-// kaiju, in case params.kaiju_db is selected
-// Conditionally create the input channel with data or as empty channel,
-// the process consuming the input channels will only execute if the channel is populated
-if(params.kaiju_db){
-    Channel
-        .of( "${params.kaiju_db}" )
-        .set { kaiju_db }
-} else {
-        kaiju_db = Channel.empty()
 }
 
 
@@ -218,9 +202,9 @@ process Fastp {
     -j ${sample_id}_fastp.json
     """
 }
-// make fastp channels for kraken2, kaiju and mqc
+// make fastp channels for kraken2 and mqc
 fastp_ch
-    .into { fastp1; fastp2 }
+    .into { fastp1 ; }
 
 
 /*
@@ -277,80 +261,6 @@ process Kraken2 {
 
 }
 
-
-process  KaijuDBPrep {
-  cpus "4"
-  memory "16 GB"
-  time "24:00:00"
-
-  input:
-    val(x) from kaiju_db
-  
-  output:
-    path("${x}/*.fmi") into fmi_ch
-    path("*.dmp") into dmp_ch_1 // for kaiju
-    path("*.dmp") into dmp_ch_2 // for kaiju2table
-  
-  script:
-  """
-  kaiju-makedb -s $x 
-  """
-}
-
-// combine necessary here, for each sample_id with the db files 
-
-// kaiju is also not executed if its input channels are empty
-process Kaiju {
-  //publishDir "${params.outdir}/samples", mode: 'copy', pattern: '*.tsv'
-
-  input:
-    tuple sample_id, file(x) from fastp2
-    path("*") from dmp_ch_1.first() // this trick makes it a value channel, so no need to combine!
-    file fmi from fmi_ch.first()
-  
-  output:
-    file("*_kaiju.out") into kaiju_summary_ch
-    file("*kaiju.out.krona") into kaiju2krona_ch
-
-  script:
-  def single = x instanceof Path
-  def kaiju_input = single ? "-i \"${ x[0] }\"" : "-i \"${ x[0] }\" -j \"${ x[1] }\""
-  """
-  kaiju \
-    -z 6 \
-    -t nodes.dmp \
-    -f $fmi \
-    $kaiju_input \
-    -o ${sample_id}_kaiju.out
-
-  kaiju2krona -t nodes.dmp -n names.dmp -i ${sample_id}_kaiju.out -o ${sample_id}_kaiju.out.krona
-  """
-}
-
-process KaijuSummary {
-  publishDir params.outdir, mode: 'copy'
-  
-  input:
-    path("*") from dmp_ch_2
-    path x from kaiju_summary_ch.collect()
-  
-  output:
-    path 'kaiju_summary.tsv' into kaiju2mqc_ch
-  
-  script:
-  """
-  kaiju2table \
-    -t nodes.dmp \
-    -n names.dmp \
-    -r genus -m 1.0 \
-    -o kaiju_summary.tsv \
-    $x
-  """
-}
-
-// setup the krona database and put it in a channel
-// if no internet --skip_krona skips this process, and because the output channel is empty - it skips also
-// process krona
     
 process KronaDB {
 
@@ -373,16 +283,14 @@ process KronaDB {
 // prepare channel for krona, I want to have all samples in one krona plot
 // e.g. ktImportTaxonomy file1 file2 ...
 
-// run krona on the kraken2 and kaiju results
-// SPLIT THIS PROCESS FOR KRAKEN AND KAIJU
+// run krona on the kraken2 result
 process KronaFromKraken {
 
-    memory "16GB"
+    memory "32GB"
     publishDir params.outdir, mode: 'copy'
 
     input:
         file(x) from kraken2krona_ch.collect()
-        //file(y) from kaiju2krona_ch.collect()
         file("krona_db/taxonomy.tab") from krona_db_ch
     
     output:
@@ -398,26 +306,6 @@ process KronaFromKraken {
     """
 }
 
-process KronaFromKaiju {
-    publishDir params.outdir, mode: 'copy'
-
-    input:
-        //file(x) from kraken2krona_ch.collect()
-        file(y) from kaiju2krona_ch.collect()
-        file("krona_db/taxonomy.tab") from krona_db_ch
-    
-    output:
-        file("*_taxonomy_krona.html")
-
-    when:
-        !params.skip_krona
-    
-    script:
-    """
-    mkdir krona
-    ktImportText -o kaiju_taxonomy_krona.html $y
-    """
-}
 
 // format and save bracken table as DataTable, per sample
 
@@ -465,8 +353,7 @@ process MultiQC {
 
     input:
         file x from fastp4mqc_ch.collect()
-        file y from kraken2mqc_ch.collect().ifEmpty([]) // do mqc if only one of kraken2 or kaiju was executed
-        file z from kaiju2mqc_ch.ifEmpty([]) // do mqc if only one of kraken2 or kaiju was executed
+        file y from kraken2mqc_ch.collect().ifEmpty([]) 
     output:
         file "multiqc_report.html"
     

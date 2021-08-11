@@ -3,6 +3,7 @@ channels:
   - conda-forge
   - bioconda
 dependencies:
+  - python=3.6
   - fastp
   - kraken2=2.1.1
   - multiqc=1.10
